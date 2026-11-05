@@ -10,6 +10,28 @@
 if [ -n "${LC_ALL:-}" ]; then export LC_CTYPE="$LC_ALL"; unset LC_ALL; fi
 export LC_NUMERIC=C
 
+# Toglie i caratteri di controllo dai testi che arrivano dal repo o dal filesystem:
+# nomi di cartella e STATE.md possono contenere sequenze per il terminale.
+clean() { printf '%s' "$1" | jq -Rrs 'gsub("\\p{Cc}"; "")' 2>/dev/null; }
+
+# La statusline gira a ogni refresh, anche in repo scaricati e non fidati, dove la
+# config locale puo' far eseguire comandi a git. Qui si chiudono repo bare annidati
+# (arrivano con un normale clone), fsmonitor e hook post-index-change.
+gitq() {
+  git -c safe.bareRepository=explicit -c core.fsmonitor=false --no-optional-locks \
+    -C "$dir" "$@" 2>/dev/null
+}
+
+# I filtri clean non si spengono con -c perche' il nome lo sceglie il repo: se sono
+# definiti nella config locale niente status. Quelli globali (git-lfs) vanno bene.
+# Se git non sa rispondere (versione < 2.26) si considera non verificabile.
+status_is_safe() {
+  local filters
+  filters=$(gitq config --show-scope --get-regexp '^filter\..*\.(clean|process)$')
+  [ $? -le 1 ] || return 1
+  ! printf '%s\n' "$filters" | grep -qE '^(local|worktree)[[:space:]]'
+}
+
 input=$(cat)
 
 # --- Riga 1: identità PS1 + statusline GSD di base ---------------------------
@@ -28,23 +50,29 @@ effort=$(printf '%s' "$input" | jq -r '.effort.level // empty' 2>/dev/null)
 
 # a) Segmento git: branch, ahead/behind, dirty, worktree.
 if [ -n "$dir" ]; then
-  branch=$(git -C "$dir" rev-parse --abbrev-ref HEAD 2>/dev/null)
+  branch=$(gitq rev-parse --abbrev-ref HEAD)
   if [ -n "$branch" ]; then
-    [ "$branch" = "HEAD" ] && branch=$(git -C "$dir" rev-parse --short HEAD 2>/dev/null)
-    g=$(printf '\033[36m⎇ %s\033[0m' "$branch")
-    counts=$(git -C "$dir" rev-list --left-right --count '@{upstream}...HEAD' 2>/dev/null)
+    [ "$branch" = "HEAD" ] && branch=$(gitq rev-parse --short HEAD)
+    g=$(printf '\033[36m⎇ %s\033[0m' "$(clean "$branch")")
+    counts=$(gitq rev-list --left-right --count '@{upstream}...HEAD')
     if [ -n "$counts" ]; then
       behind=$(printf '%s' "$counts" | awk '{print $1}')
       ahead=$(printf '%s' "$counts" | awk '{print $2}')
       [ -n "$ahead" ]  && [ "$ahead"  -gt 0 ] 2>/dev/null && g="$g$(printf '\033[32m ↑%s\033[0m' "$ahead")"
       [ -n "$behind" ] && [ "$behind" -gt 0 ] 2>/dev/null && g="$g$(printf '\033[31m ↓%s\033[0m' "$behind")"
     fi
-    dirty=$(git -C "$dir" status --porcelain 2>/dev/null | wc -l | tr -d ' ')
-    [ -n "$dirty" ] && [ "$dirty" -gt 0 ] 2>/dev/null && g="$g$(printf '\033[33m ✱%s\033[0m' "$dirty")"
-    top=$(git -C "$dir" rev-parse --show-toplevel 2>/dev/null)
+    # --ignore-submodules=dirty: niente git figli con la config del submodule.
+    # --no-renames: la ricerca delle rinomine puo' scaricare blob (partial clone).
+    if status_is_safe; then
+      dirty=$(gitq status --porcelain --no-renames --ignore-submodules=dirty | wc -l | tr -d ' ')
+      [ -n "$dirty" ] && [ "$dirty" -gt 0 ] 2>/dev/null && g="$g$(printf '\033[33m ✱%s\033[0m' "$dirty")"
+    else
+      g="$g$(printf '\033[33m ✱?\033[0m')"
+    fi
+    top=$(gitq rev-parse --show-toplevel)
     if [ -n "$top" ]; then
       wt=$(basename "$top"); cur=$(basename "$dir")
-      [ "$wt" != "$cur" ] && g="$g$(printf ' \033[2m⌂ %s\033[0m' "$wt")"
+      [ "$wt" != "$cur" ] && g="$g$(printf ' \033[2m⌂ %s\033[0m' "$(clean "$wt")")"
     fi
     add2 "$g"
   fi
@@ -60,6 +88,7 @@ if [ -n "$dir" ]; then
   done
   if [ -n "$state" ]; then
     sa=$(grep -m1 '^stopped_at:' "$state" | sed -E 's/^stopped_at:[[:space:]]*//; s/^"//; s/"[[:space:]]*$//')
+    sa=$(clean "$sa")
     if [ -n "$sa" ]; then
       [ "${#sa}" -gt 60 ] && sa="${sa:0:60}…"
       add2 "$(printf '\033[35m▶ %s\033[0m' "$sa")"

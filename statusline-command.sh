@@ -10,14 +10,17 @@
 if [ -n "${LC_ALL:-}" ]; then export LC_CTYPE="$LC_ALL"; unset LC_ALL; fi
 export LC_NUMERIC=C
 
+# Toglie i caratteri di controllo dai testi che arrivano dal repo o dal filesystem:
+# nomi di cartella e STATE.md possono contenere sequenze per il terminale.
+clean() { printf '%s' "$1" | jq -Rrs 'gsub("\\p{Cc}"; "")' 2>/dev/null; }
+
 input=$(cat)
 
 user=$(whoami)
 host=$(hostname -s)
 dir=$(printf '%s' "$input" | jq -r '.workspace.current_dir // empty' 2>/dev/null)
 [ -z "$dir" ] && dir=$(pwd)
-short_dir=$(basename "$dir")
-identity="\033[01;32m${user}@${host}\033[00m:\033[01;34m${short_dir}\033[00m"
+short_dir=$(clean "$(basename "$dir")")
 
 gsd="$HOME/.claude/hooks/gsd-statusline.js"
 if [ -f "$gsd" ] && command -v node >/dev/null 2>&1; then
@@ -46,4 +49,4 @@ else
   fi
 fi
 
-printf "${identity} │ %s" "$rest"
+printf '\033[01;32m%s@%s\033[00m:\033[01;34m%s\033[00m │ %s' "$user" "$host" "$short_dir" "$rest"
