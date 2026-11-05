@@ -215,11 +215,15 @@ expect "install: sets the command"  "$(cat "$I/.claude/settings.json")" 'statusl
 expect "install: keeps other keys"  "$(cat "$I/.claude/settings.json")" '"theme": "dark"'
 [ "$(readlink "$I/.claude/statusline-command.sh")" = "$ROOT/statusline-command.sh" ] \
   && ok "install: symlinks the scripts" || not_ok "install: symlinks the scripts"
-baks=$(ls "$I/.claude" | grep -c '\.bak\.')
+count_backups() {
+  set -- "$I/.claude"/*.bak.*
+  if [ -e "$1" ]; then echo "$#"; else echo 0; fi
+}
+baks=$(count_backups)
 [ "$baks" = 2 ] && ok "install: backs up replaced files" || not_ok "install: backs up replaced files" "got $baks"
 expect "install: backup holds the old file" "$(cat "$I/.claude"/statusline-command.sh.bak.*)" old
 HOME=$I bash "$ROOT/install.sh" >/dev/null
-[ "$(ls "$I/.claude" | grep -c '\.bak\.')" = "$baks" ] && ok "install: idempotent" || not_ok "install: idempotent"
+[ "$(count_backups)" = "$baks" ] && ok "install: idempotent" || not_ok "install: idempotent"
 
 I=$W/i2
 mkdir -p "$I/.claude"
