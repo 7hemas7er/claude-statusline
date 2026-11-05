@@ -47,7 +47,7 @@ names and `STATE.md` before they are printed.
 
 Clean filters defined in a repository's own config cannot be disabled, so the change
 count is skipped there and shows `✱?`. Filters from your global config, such as
-`git-lfs`, are not affected.
+`git-lfs`, are not affected. `✱?` also appears when `git status` fails.
 
 ## Tests
 

@@ -53,10 +53,14 @@ mark() {
 
 # The status line must not fire the vector, and plain git must: without the second
 # half a git upgrade that defuses the fixture would turn this into an empty pass.
-no_exec() {  # $1=vector $2=repo
+no_exec() {  # $1=vector $2=repo [git args that fire it, default: status]
+  local name=$1 repo=$2
+  shift 2
+  [ $# -gt 0 ] || set -- status --porcelain
+  set -- "$name" "$repo" "$@"
   render "$2" >/dev/null
   if [ -e "$W/hit-$1" ]; then not_ok "exec: $1 is blocked"; else ok "exec: $1 is blocked"; fi
-  git -C "$2" status --porcelain >/dev/null 2>&1
+  git -C "$repo" "${@:3}" >/dev/null 2>&1
   if [ -e "$W/hit-$1" ]; then ok "exec: $1 fixture fires with plain git"
   else not_ok "exec: $1 fixture fires with plain git"; fi
 }
@@ -116,6 +120,41 @@ git -C "$W/lazy" read-tree --empty
 printf '100644 %s\trenamed.txt\n' "$old_blob" | git -C "$W/lazy" update-index --index-info
 no_exec lazy "$W/lazy"
 
+# Taken before the server moves on, so the commit below is missing from it.
+git clone -q --no-checkout --filter=blob:none "file://$W/srv" "$W/lazy-upstream" 2>/dev/null
+
+echo more >> "$W/srv/f.txt"
+git -C "$W/srv" add .
+git -C "$W/srv" commit -qm three
+missing=$(git -C "$W/srv" rev-parse HEAD)
+
+promisor_clone() {  # $1=repo $2=filter
+  git clone -q --no-checkout "--filter=$2" "file://$W/srv" "$1" 2>/dev/null
+  git -C "$1" config remote.origin.url ssh://x/y
+}
+ahead_behind=(rev-list --left-right --count '@{upstream}...HEAD')
+
+# @{upstream} points at a commit the repo does not have.
+mark lazy-upstream
+git -C "$W/lazy-upstream" config remote.origin.url ssh://x/y
+git -C "$W/lazy-upstream" config core.sshCommand "$W/lazy-upstream.sh"
+echo "$missing" > "$W/lazy-upstream/.git/refs/remotes/origin/main"
+no_exec lazy-upstream "$W/lazy-upstream" "${ahead_behind[@]}"
+
+# HEAD exists but its tree is missing: status needs it even with --no-renames.
+mark lazy-tree
+promisor_clone "$W/lazy-tree" tree:0
+git -C "$W/lazy-tree" config core.sshCommand "$W/lazy-tree.sh"
+no_exec lazy-tree "$W/lazy-tree"
+
+# The repo re-enables a transport that runs commands, so protocol.allow is not enough.
+mark lazy-ext
+promisor_clone "$W/lazy-ext" tree:0
+git -C "$W/lazy-ext" config remote.origin.url "ext::$W/lazy-ext.sh"
+git -C "$W/lazy-ext" config protocol.ext.allow always
+no_exec lazy-ext "$W/lazy-ext"
+expect "status failure shows unknown, not clean" "$(render "$W/lazy-ext")" '✱?'
+
 # --- Terminal escapes and format strings ----------------------------------------
 D=$W/$'esc\033]0;title\007%s%n\\x41'
 new_repo "$D"
@@ -172,6 +211,7 @@ expect "filter: global one keeps the count" "$out" '✱1'
 git config --global --unset filter.lfs.clean
 
 git -C "$W/r" config filter.x.clean cat
+reject "filter: local one hides the number" "$(render "$W/r")" '✱1'
 expect "filter: local one shows unknown" "$(render "$W/r")" '✱?'
 git -C "$W/r" config --unset filter.x.clean
 

@@ -17,8 +17,13 @@ clean() { printf '%s' "$1" | jq -Rrs 'gsub("\\p{Cc}"; "")' 2>/dev/null; }
 # La statusline gira a ogni refresh, anche in repo scaricati e non fidati, dove la
 # config locale puo' far eseguire comandi a git. Qui si chiudono repo bare annidati
 # (arrivano con un normale clone), fsmonitor e hook post-index-change.
+# Nei partial clone qualunque oggetto mancante avvia un fetch, che col trasporto
+# scelto dal repo esegue comandi: GIT_ALLOW_PROTOCOL vieta ogni trasporto e, a
+# differenza di protocol.allow, la config locale non lo scavalca.
+# GIT_NO_LAZY_FETCH, dove git lo supporta, evita anche il tentativo di fetch.
 gitq() {
-  git -c safe.bareRepository=explicit -c core.fsmonitor=false --no-optional-locks \
+  GIT_ALLOW_PROTOCOL=none GIT_NO_LAZY_FETCH=1 \
+    git -c safe.bareRepository=explicit -c core.fsmonitor=false --no-optional-locks \
     -C "$dir" "$@" 2>/dev/null
 }
 
@@ -62,10 +67,13 @@ if [ -n "$dir" ]; then
       [ -n "$behind" ] && [ "$behind" -gt 0 ] 2>/dev/null && g="$g$(printf '\033[31m ↓%s\033[0m' "$behind")"
     fi
     # --ignore-submodules=dirty: niente git figli con la config del submodule.
-    # --no-renames: la ricerca delle rinomine puo' scaricare blob (partial clone).
-    if status_is_safe; then
-      dirty=$(gitq status --porcelain --no-renames --ignore-submodules=dirty | wc -l | tr -d ' ')
-      [ -n "$dirty" ] && [ "$dirty" -gt 0 ] 2>/dev/null && g="$g$(printf '\033[33m ✱%s\033[0m' "$dirty")"
+    # --no-renames: nei partial clone le rinomine richiedono blob che qui non
+    # si scaricano, e status fallirebbe. Se fallisce comunque il conteggio e' ignoto.
+    if status_is_safe && st=$(gitq status --porcelain --no-renames --ignore-submodules=dirty); then
+      if [ -n "$st" ]; then
+        dirty=$(printf '%s\n' "$st" | wc -l | tr -d ' ')
+        g="$g$(printf '\033[33m ✱%s\033[0m' "$dirty")"
+      fi
     else
       g="$g$(printf '\033[33m ✱?\033[0m')"
     fi
